@@ -20,6 +20,7 @@ import time
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from io import BytesIO
+from urllib.request import urlopen
 
 DEFAULT_MODEL = "gpt-image-1.5"
 DEFAULT_SIZE = "1024x1024"
@@ -245,16 +246,30 @@ def _print_request(payload: dict) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
-def _decode_and_write(images: List[str], outputs: List[Path], force: bool) -> None:
-    for idx, image_b64 in enumerate(images):
-        if idx >= len(outputs):
-            break
-        out_path = outputs[idx]
-        if out_path.exists() and not force:
-            _die(f"Output already exists: {out_path} (use --force to overwrite)")
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_bytes(base64.b64decode(image_b64))
-        print(f"Wrote {out_path}")
+def _download_image(url: str, timeout: float = 120.0) -> bytes:
+    with urlopen(url, timeout=timeout) as resp:
+        data = resp.read()
+    if not data:
+        _die(f"Downloaded empty image from {url}")
+    return data
+
+
+def _collect_result_images(result: Any) -> List[bytes]:
+    data = getattr(result, "data", None) or []
+    if not data:
+        _die("Image response contained no data items.")
+    images: List[bytes] = []
+    for idx, item in enumerate(data, start=1):
+        b64 = getattr(item, "b64_json", None)
+        if b64:
+            images.append(base64.b64decode(b64))
+            continue
+        url = getattr(item, "url", None)
+        if not url:
+            _die(f"Response item {idx} contained neither b64_json nor url.")
+        print(f"Downloading image {idx} from {url}", file=sys.stderr)
+        images.append(_download_image(url))
+    return images
 
 
 def _derive_downscale_path(path: Path, suffix: str) -> Path:
@@ -297,8 +312,8 @@ def _downscale_image_bytes(image_bytes: bytes, *, max_dim: int, output_format: s
         return out.getvalue()
 
 
-def _decode_write_and_downscale(
-    images: List[str],
+def _write_and_downscale(
+    images: List[bytes],
     outputs: List[Path],
     *,
     force: bool,
@@ -306,15 +321,13 @@ def _decode_write_and_downscale(
     downscale_suffix: str,
     output_format: str,
 ) -> None:
-    for idx, image_b64 in enumerate(images):
+    for idx, raw in enumerate(images):
         if idx >= len(outputs):
             break
         out_path = outputs[idx]
         if out_path.exists() and not force:
             _die(f"Output already exists: {out_path} (use --force to overwrite)")
         out_path.parent.mkdir(parents=True, exist_ok=True)
-
-        raw = base64.b64decode(image_b64)
         out_path.write_bytes(raw)
         print(f"Wrote {out_path}")
 
@@ -607,8 +620,8 @@ async def _run_generate_batch(args: argparse.Namespace) -> int:
                 )
                 elapsed = time.time() - started
                 print(f"{job_label} completed in {elapsed:.1f}s", file=sys.stderr)
-            images = [item.b64_json for item in result.data]
-            _decode_write_and_downscale(
+            images = await asyncio.to_thread(_collect_result_images, result)
+            _write_and_downscale(
                 images,
                 outputs,
                 force=args.force,
@@ -689,8 +702,8 @@ def _generate(args: argparse.Namespace) -> None:
     elapsed = time.time() - started
     print(f"Generation completed in {elapsed:.1f}s.", file=sys.stderr)
 
-    images = [item.b64_json for item in result.data]
-    _decode_write_and_downscale(
+    images = _collect_result_images(result)
+    _write_and_downscale(
         images,
         output_paths,
         force=args.force,
@@ -768,8 +781,8 @@ def _edit(args: argparse.Namespace) -> None:
 
     elapsed = time.time() - started
     print(f"Edit completed in {elapsed:.1f}s.", file=sys.stderr)
-    images = [item.b64_json for item in result.data]
-    _decode_write_and_downscale(
+    images = _collect_result_images(result)
+    _write_and_downscale(
         images,
         output_paths,
         force=args.force,

@@ -33,8 +33,8 @@ Model-specific note for `input_fidelity`:
 - `gpt-image-1.5` preserves the first 5 input images with higher fidelity.
 
 ## Output
-- `data[]` list with `b64_json` per image
-- The bundled `scripts/image_gen.py` CLI decodes `b64_json` and writes output files for you.
+- `data[]` list with `b64_json` per image (some OpenAI-compatible relays return `url` instead)
+- The bundled `scripts/image_gen.py` CLI decodes `b64_json` and writes output files for you; `url` results are downloaded automatically.
 
 ## Limits and notes
 - Input images and masks must be under 50MB.
